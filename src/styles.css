@@ -1,0 +1,81 @@
+:root {
+    --bg: #1f1f1f;
+    --panel: #2a2a2a;
+    --line: #3a3a3a;
+    --text: #eaeaea;
+    --accent: #e04;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    display: block;
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif;
+}
+app-root{
+    display: block;
+    height: 100%;
+}
+
+app-root::part(div){
+    height: 100%;
+}
+button {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+button:hover {
+    border-color: var(--text);
+}
+
+.app {
+    display: grid;
+    grid-template-rows: auto 1fr 1fr;
+    height: 100vh;
+    gap: 8px;
+    padding: 12px;
+}
+
+.toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.zone {
+    background: #222;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: auto 1fr;
+}
+
+.zone__header {
+    padding: 8px 10px;
+    background: #262626;
+    border-bottom: 1px solid var(--line);
+    font-weight: 600;
+}
+
+.zone__content {
+    position: relative;
+}
+
+.buffer-content,
+.work-content {
+    width: 100%;
+    height: 100%;
+}
