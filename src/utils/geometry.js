@@ -15,7 +15,7 @@ export const toPointsAttr = (pts) => pts.map(([x,y]) => `${x.toFixed(1)},${y.toF
 
 // превью для буферки
 export function makePreviewPolygonData() {
-  const n   = randInt(5, 7);
+  const n = randInt(3, 10);
   const pts = randomBlob(50, 35, 28, n, 0.2, 0.18);
   return { n, viewBox:'0 0 100 70', points: toPointsAttr(pts), fill:'#bf175aff', stroke:'#8b1747ff' };
 }

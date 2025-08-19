@@ -45,7 +45,7 @@ class AppRoot extends HTMLElement {
                 if (state.buffer?.length) buffer.addPolygons(state.buffer);
                 if (state.viewBox) work.setViewBox(state.viewBox);
                 if (state.work?.length) work.loadShapes(state.work);
-            } catch (e) { 
+            } catch (e) {
                 console.error(e);
             }
         }, { once: true });
@@ -75,6 +75,8 @@ class BufferZone extends HTMLElement {
         :host { display:block; height:100%; }
         .wrap { position:relative; width:100%; height:100%; }
         .list { padding:8px; display:flex; flex-wrap:wrap; align-content:flex-start; }
+        :host([data-drop]) { outline: 2px dashed var(--accent); outline-offset: -2px; }
+
       </style>
       <div class="wrap">
         <slot name="header"></slot>
@@ -252,6 +254,8 @@ class WorkZone extends HTMLElement {
             kickPanAnim();
         });
 
+
+
         // drop из буфера в работу
         svg.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
         svg.addEventListener('drop', (e) => {
@@ -261,19 +265,6 @@ class WorkZone extends HTMLElement {
 
             const data = JSON.parse(raw);
             const cursor = this._toView(e.clientX, e.clientY);
-            const fromSame = currentDrag && this._layer.contains(currentDrag);
-
-            if (fromSame) {
-                const g = currentDrag;
-                const poly = g.querySelector('polygon');
-                const pts = this._parsePoints(poly.getAttribute('points'));
-                const c = this._centroid(pts);
-                g._tx = cursor.x - c.x;
-                g._ty = cursor.y - c.y;
-                this._clampTranslate(g);
-                currentDrag = null;
-                return;
-            }
 
             const canonStr = data.canonicalPoints || data.points;
             const canon = this._parsePoints(canonStr);
@@ -303,9 +294,27 @@ class WorkZone extends HTMLElement {
         g.innerHTML = '';
 
         const worldPerPx = this._vb.w / this._svg.clientWidth;
+        const strokeW = worldPerPx * 4; // ровно 1 экранный пиксель
+
+        // —— функции «прищелкивания» к пиксельной сетке ——
+        const snapX = (xWorld) => {
+            const screenX = (xWorld - this._vb.x) / worldPerPx;         // в пикселях
+            const aligned = Math.round(screenX) + 0.5;                   // N + 0.5 px
+            return this._vb.x + aligned * worldPerPx;                    // назад в мир
+        };
+        const snapY = (yWorld) => {
+            const screenY = (yWorld - this._vb.y) / worldPerPx;
+            const aligned = Math.round(screenY) + 0.5;
+            return this._vb.y + aligned * worldPerPx;
+        };
         const edgePadWorld = 6 * worldPerPx;
 
-        const nice = (v) => { const p = 10 ** Math.floor(Math.log10(v)); const m = v / p; return (m >= 5 ? 5 : m >= 2 ? 2 : 1) * p; };
+        const nice = (v) => {
+            const p = 10 ** Math.floor(Math.log10(v));
+            const m = v / p;
+            return (m >= 5 ? 5 : m >= 2 ? 2 : 1) * p;
+        };
+
         const approxStep = 40 * worldPerPx;
         let step = Math.max(1e-6, nice(approxStep));
 
@@ -314,47 +323,68 @@ class WorkZone extends HTMLElement {
         while ((this._vb.h / step) > maxLines) step *= 2;
 
         const pxPerStep = step / worldPerPx;
-        const showEvery = Math.max(1, Math.ceil(55 / pxPerStep));
-        const strokeW = 1 * worldPerPx;
-        const tZoom = this._clamp((2 - (this._zoom || 1)) / (2 - 0.5), 0, 1);
-        const fontPx = 20 + (12 - 20) * tZoom;
-        const fontWorld = fontPx * worldPerPx;
+        const showEvery = Math.max(1, Math.round(55 / pxPerStep));
 
-        // X
-        const startX = Math.floor(this._vb.x / step) * step;
-        let ix = 0;
-        for (let x = startX; x <= this._vb.x + this._vb.w + 1e-6; x += step, ix++) {
-            const l = this._line(x, this._vb.y, x, this._vb.y + this._vb.h, strokeW);
+        // размер шрифта стабильно из worldPerPx
+        const fontWorld = 14 * worldPerPx;
+
+        // --- X-линии ---
+        const kStartX = Math.ceil((this._vb.x - 1e-9) / step);
+        const kEndX = Math.floor((this._vb.x + this._vb.w + 1e-9) / step);
+
+        for (let k = kStartX; k <= kEndX; k++) {
+            const x = k * step;
+            const xs = snapX(x); // прищелкнули к пикселям
+            const l = this._line(xs, this._vb.y, xs, this._vb.y + this._vb.h, strokeW);
+            l.setAttribute('stroke-linecap', 'butt');
             g.appendChild(l);
-            if (ix % showEvery === 0) {
+
+            if ((k % showEvery) === 0) {
                 const tx = document.createElementNS(SVG_NS, 'text');
-                tx.setAttribute('x', x);
-                tx.setAttribute('y', this._vb.y + this._vb.h - edgePadWorld);
+                tx.setAttribute('x', xs);
+                tx.setAttribute('y', snapY(this._vb.y + this._vb.h - edgePadWorld)); // тоже можно снапнуть по Y
                 tx.setAttribute('text-anchor', 'middle');
                 tx.setAttribute('dominant-baseline', 'alphabetic');
                 tx.setAttribute('font-size', fontWorld);
-                tx.textContent = Math.round(x);
+                tx.textContent = this._formatTick(k * step, step);
                 g.appendChild(tx);
             }
         }
 
-        // Y
-        const startY = Math.floor(this._vb.y / step) * step;
-        let iy = 0;
-        for (let y = startY; y <= this._vb.y + this._vb.h + 1e-6; y += step, iy++) {
-            const l = this._line(this._vb.x, y, this._vb.x + this._vb.w, y, strokeW);
+        // --- Y-линии ---
+        const kStartY = Math.ceil((this._vb.y - 1e-9) / step);
+        const kEndY = Math.floor((this._vb.y + this._vb.h + 1e-9) / step);
+
+        for (let k = kStartY; k <= kEndY; k++) {
+            const y = k * step;
+            const ys = snapY(y);
+            const l = this._line(this._vb.x, ys, this._vb.x + this._vb.w, ys, strokeW);
+            l.setAttribute('stroke-linecap', 'butt');
             g.appendChild(l);
-            if (iy % showEvery === 0) {
+
+            if ((k % showEvery) === 0) {
                 const ty = document.createElementNS(SVG_NS, 'text');
-                ty.setAttribute('x', this._vb.x + edgePadWorld);
-                ty.setAttribute('y', y);
+                ty.setAttribute('x', snapX(this._vb.x + edgePadWorld));    // можно снапнуть по X
+                ty.setAttribute('y', ys);
                 ty.setAttribute('text-anchor', 'start');
                 ty.setAttribute('dominant-baseline', 'middle');
                 ty.setAttribute('font-size', fontWorld);
-                ty.textContent = Math.round(y);
+                ty.textContent = this._formatTick(k * step, step);
                 g.appendChild(ty);
             }
         }
+    }
+
+    _clientToWorld(x, y) {
+        const p = this._svg.createSVGPoint();
+        p.x = x; p.y = y;
+        return p.matrixTransform(this._svg.getScreenCTM().inverse());
+    }
+
+    _formatTick(value, step) {
+        const decimals = Math.max(0, -Math.floor(Math.log10(step)));
+        const snapped = Math.round(value / step) * step;
+        return snapped.toFixed(decimals);
     }
 
     // ——— shapes ———
@@ -372,28 +402,58 @@ class WorkZone extends HTMLElement {
         g._tx = 0; g._ty = 0;
 
         let drag = null;
+        let crossMode = false;
+
+        const bufferEl = () => document.querySelector('buffer-zone');
+        const inBuffer = (clientX, clientY) => {
+            const el = bufferEl(); if (!el) return false;
+            const r = el.getBoundingClientRect();
+            return clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom;
+        };
+
         const onDown = (ev) => {
-            // Ctrl/Alt перенос в буфер
-            if (ev.ctrlKey || ev.altKey) { ev.preventDefault(); this._startCrossDnD(ev, g, poly); return; }
+            if (ev.ctrlKey || ev.altKey) {         // горячий старт
+                ev.preventDefault();
+                this._startLiftDrag(ev, g, poly);    // ⬅ вместо _startCrossDnD
+                return;
+            }
             if (ev.button !== 0) return;
             ev.preventDefault();
             poly.setPointerCapture(ev.pointerId);
             const v = this._toView(ev.clientX, ev.clientY);
-            drag = { x: v.x, y: v.y, tx: g._tx || 0, ty: g._ty || 0 };
+            drag = { x: v.x, y: v.y, tx: g._tx || 0, ty: g._ty || 0, pid: ev.pointerId };
             poly.classList.add('dragging');
         };
+
         const onMove = (ev) => {
             if (!drag) return;
+            // если зашли курсором в buffer — переключаемся на «живой» перенос БЕЗ клавиш
+            const buf = document.querySelector('buffer-zone');
+            if (buf) {
+                const r = buf.getBoundingClientRect();
+                const inside = ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+                if (inside) {
+                    poly.classList.remove('dragging');
+                    poly.releasePointerCapture?.(drag.pid);
+                    drag = null;
+                    this._startLiftDrag(ev, g, poly);  // ⬅ ключевой вызов
+                    return;
+                }
+            }
+
+            // обычный drag по рабочей зоне
             const v = this._toView(ev.clientX, ev.clientY);
             g._tx = drag.tx + (v.x - drag.x);
             g._ty = drag.ty + (v.y - drag.y);
             this._clampTranslate(g);
         };
+
         const onUp = (ev) => {
-            if (!drag) return;
-            drag = null;
-            poly.classList.remove('dragging');
-            poly.releasePointerCapture?.(ev.pointerId);
+            if (drag) {
+                drag = null;
+                poly.classList.remove('dragging');
+                poly.releasePointerCapture?.(ev.pointerId);
+            }
         };
 
         poly.addEventListener('pointerdown', onDown);
@@ -404,54 +464,215 @@ class WorkZone extends HTMLElement {
         return g;
     }
 
-    _startCrossDnD(startEv, g, poly) {
-        const bufferEl = document.querySelector('buffer-zone');
-        if (!bufferEl) return;
+    _startLiftDrag(startEv, g, poly) {
+        const buffer = document.querySelector('buffer-zone');
+        if (!buffer) return;
 
-        // простое превью
+        // 1) оверлей поверх рабочего SVG
+        const vbStr = this._svg.getAttribute('viewBox');
+        this._showOverlay(vbStr);
+        this._placeOverlayOverWork(); // на всякий случай сразу выровняем
+
+        // 2) переносим тот же <g> в оверлей (плейсхолдер оставляем в слое работы)
+        const placeholder = document.createComment('g-placeholder');
+        if (!g._placeholder) g._placeholder = placeholder;
+        else g._placeholder.replaceWith(placeholder);
+        this._layer.replaceChild(placeholder, g);
+        this._overlaySvg.appendChild(g); // <-- важно: в оверлейный SVG
+
+        // 3) стиль и подготовка
+        poly.releasePointerCapture?.(startEv.pointerId);
+        poly.classList.add('dragging');
+
+        // центроид текущего полигона (локальные точки)
+        const ptsLocal = this._parsePoints(poly.getAttribute('points'));
+        const cLocal = this._centroid(ptsLocal);
+
+        const markBuffer = (inside) => {
+            if (inside) buffer.setAttribute('data-drop', '');
+            else buffer.removeAttribute('data-drop');
+        };
+
+        const onMove = (e) => {
+            // поддерживаем совпадение, если вдруг страница поехала/резайзнулась
+            this._placeOverlayOverWork();
+
+            // ставим центр полигона под курсор в системе координат ОВЕРЛЕЯ
+            const cur = this._clientToOverlay(e.clientX, e.clientY);
+            g._tx = cur.x - cLocal.x;
+            g._ty = cur.y - cLocal.y;
+            g.setAttribute('transform', `translate(${g._tx},${g._ty})`);
+
+            // подсветка буфера
+            const r = buffer.getBoundingClientRect();
+            const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+            markBuffer(inside);
+        };
+
+        const onUp = (e) => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+
+            const r = buffer.getBoundingClientRect();
+            const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+            markBuffer(false);
+            poly.classList.remove('dragging');
+
+            if (inside) {
+                const ptsStr = g.dataset.canonical || poly.getAttribute('points');
+                buffer.addPolygons([{ points: ptsStr, viewBox: '0 0 100 70', fill: poly.getAttribute('fill'), stroke: poly.getAttribute('stroke') }]);
+                g.remove();
+            } else {
+                // вернуть в рабочую зону на новой позиции и поджать внутрь
+                this._layer.replaceChild(g, g._placeholder);
+                delete g._placeholder;
+                this._clampTranslate(g);
+            }
+
+            this._hideOverlayIfEmpty();
+        };
+
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp, { once: true });
+    }
+
+
+
+    _startNativeDnD(startEv, g, poly) {
+        // 1) временный draggable‑прокси под курсором
+        const proxy = document.createElement('div');
+        proxy.setAttribute('draggable', 'true');
+        Object.assign(proxy.style, {
+            position: 'fixed', left: (startEv.clientX - 1) + 'px', top: (startEv.clientY - 1) + 'px',
+            width: '2px', height: '2px', zIndex: '2147483647', pointerEvents: 'auto', background: 'transparent'
+        });
+        document.body.appendChild(proxy);
+
+        // 2) drag‑image (клонируем текущую фигуру; учитываем translate)
         const dragSvg = document.createElementNS(SVG_NS, 'svg');
         dragSvg.setAttribute('width', '200');
         dragSvg.setAttribute('height', '120');
         dragSvg.setAttribute('viewBox', this._svg.getAttribute('viewBox'));
         const p2 = document.createElementNS(SVG_NS, 'polygon');
-        p2.setAttribute('points', poly.getAttribute('points'));
+
+        const tx = g._tx || 0, ty = g._ty || 0;
+        const pts = this._parsePoints(poly.getAttribute('points')).map(([x, y]) => [x + tx, y + ty]);
+        p2.setAttribute('points', this._pointsAttr(pts));
         p2.setAttribute('fill', poly.getAttribute('fill'));
         p2.setAttribute('stroke', poly.getAttribute('stroke'));
         p2.setAttribute('stroke-width', '0.8');
         dragSvg.appendChild(p2);
-        dragSvg.style.position = 'fixed';
-        dragSvg.style.pointerEvents = 'none';
-        document.body.appendChild(dragSvg);
+        Object.assign(dragSvg.style, { position: 'fixed', left: '-1000px', top: '-1000px', pointerEvents: 'none' });
 
-        const movePreview = (x, y) => { dragSvg.style.left = (x - 100) + 'px'; dragSvg.style.top = (y - 60) + 'px'; };
-        movePreview(startEv.clientX, startEv.clientY);
+        const cleanup = () => { proxy.remove(); dragSvg.remove(); };
 
-        const onMove = (e) => movePreview(e.clientX, e.clientY);
-        const onUp = (e) => {
-            window.removeEventListener('pointermove', onMove);
-            window.removeEventListener('pointerup', onUp);
-            dragSvg.remove();
+        proxy.addEventListener('dragstart', (e) => {
+            // кладём канонические точки, чтобы буфер рисовал исходную форму
+            e.dataTransfer.setData('application/x-polygon', JSON.stringify({
+                canonicalPoints: g.dataset.canonical || poly.getAttribute('points'),
+                fill: poly.getAttribute('fill'),
+                stroke: poly.getAttribute('stroke')
+            }));
+            e.dataTransfer.effectAllowed = 'move';
 
-            const r = bufferEl.getBoundingClientRect();
-            const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
-            if (inside) {
-                const ptsStr = g.dataset.canonical || poly.getAttribute('points');
-                bufferEl.addPolygons([{ points: ptsStr, viewBox: '0 0 100 70', fill: poly.getAttribute('fill'), stroke: poly.getAttribute('stroke') }]);
-                g.remove();
-            }
-        };
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp, { once: true });
+            document.body.appendChild(dragSvg);
+            e.dataTransfer.setDragImage(dragSvg, 100, 60);
+
+            // помечаем источник переноса: BufferZone на drop удалит этот g
+            currentDrag = g;
+        }, { once: true });
+
+        proxy.addEventListener('dragend', () => {
+            // Если сброс вне буфера — фигура остаётся на месте (BufferZone ничего не удалит).
+            cleanup();
+            currentDrag = null;
+        }, { once: true });
+
+        // На случай, если пользователь отпустил кнопку раньше, чем стартанул drag:
+        window.addEventListener('pointerup', () => { cleanup(); }, { once: true });
+
+        // ВАЖНО: нативный drag начнётся на следующем реальном движении мыши.
+        // Пользователь уже двигает — браузер сам инициирует drag.
     }
+
 
     // ——— utils ———
     _toView(x, y) { const p = this._svg.createSVGPoint(); p.x = x; p.y = y; return p.matrixTransform(this._svg.getScreenCTM().inverse()); }
-    _line(x1, y1, x2, y2, w) { const ln = document.createElementNS(SVG_NS, 'line'); ln.setAttribute('x1', x1); ln.setAttribute('y1', y1); ln.setAttribute('x2', x2); ln.setAttribute('y2', y2); ln.setAttribute('stroke', '#333'); ln.setAttribute('stroke-width', w); ln.setAttribute('shape-rendering', 'crispEdges'); return ln; }
-    _parsePoints(a) { return a.trim().split(/\s+/).map(p => p.split(',').map(Number)); }
+    _line(x1, y1, x2, y2, w) {
+        const ln = document.createElementNS(SVG_NS, 'line');
+        ln.setAttribute('x1', x1); ln.setAttribute('y1', y1);
+        ln.setAttribute('x2', x2); ln.setAttribute('y2', y2);
+        ln.setAttribute('stroke', '#333');
+        ln.setAttribute('stroke-width', w);
+        ln.setAttribute('vector-effect', 'non-scaling-stroke'); // ширина в экранных px
+        // ln.setAttribute('shape-rendering', 'crispEdges'); // можно убрать: снап даёт лучше
+        return ln;
+    } _parsePoints(a) { return a.trim().split(/\s+/).map(p => p.split(',').map(Number)); }
     _pointsAttr(arr) { return arr.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '); }
     _centroid(pts) { const n = pts.length; const s = pts.reduce((a, [x, y]) => (a.x += x, a.y += y, a), { x: 0, y: 0 }); return { x: s.x / n, y: s.y / n }; }
     _bbox(pts) { let miX = Infinity, miY = Infinity, maX = -Infinity, maY = -Infinity; for (const [x, y] of pts) { if (x < miX) miX = x; if (x > maX) maX = x; if (y < miY) miY = y; if (y > maY) maY = y; } return { minX: miX, minY: miY, maxX: maX, maxY: maY, width: maX - miX, height: maY - miY }; }
     _clamp(v, a, b) { return Math.min(Math.max(v, a), b); }
+
+    // === overlay helpers ===
+    _ensureOverlay() {
+        if (this._overlaySvg) return this._overlaySvg;
+
+        // контейнер на весь экран поверх всего
+        const div = document.createElement('div');
+        Object.assign(div.style, {
+            position: 'fixed',
+            left: '0', top: '0', width: '100vw', height: '100vh',
+            pointerEvents: 'none',
+            zIndex: '2147483647',   // выше всего
+            display: 'none'
+        });
+
+        // svg, совмещённый с рабочим, НО с overflow:visible
+        const svg = document.createElementNS(SVG_NS, 'svg');
+        Object.assign(svg.style, {
+            position: 'absolute',
+            left: '0px', top: '0px',
+            width: '0px', height: '0px',
+            overflow: 'visible'     // КЛЮЧ: рисуем за пределами рамки
+        });
+
+        div.appendChild(svg);
+        document.body.appendChild(div);
+
+        this._overlayDiv = div;
+        this._overlaySvg = svg;
+        return svg;
+    }
+
+    _placeOverlayOverWork() {
+        const ov = this._ensureOverlay();
+        const r = this._svg.getBoundingClientRect();
+        // совмещаем оверлейный SVG по пикселям с рабочим
+        ov.style.left = `${r.left}px`;
+        ov.style.top = `${r.top}px`;
+        ov.style.width = `${r.width}px`;
+        ov.style.height = `${r.height}px`;
+    }
+
+    _showOverlay(viewBoxStr) {
+        this._ensureOverlay();
+        this._overlayDiv.style.display = 'block';
+        this._placeOverlayOverWork();
+        this._overlaySvg.setAttribute('viewBox', viewBoxStr);
+    }
+
+    _hideOverlayIfEmpty() {
+        if (this._overlaySvg && this._overlaySvg.childNodes.length === 0) {
+            this._overlayDiv.style.display = 'none';
+        }
+    }
+
+    _clientToOverlay(x, y) {
+        const p = this._overlaySvg.createSVGPoint();
+        p.x = x; p.y = y;
+        return p.matrixTransform(this._overlaySvg.getScreenCTM().inverse());
+    }
+
 
     _clampTranslate(g) {
         const poly = g.querySelector('polygon');
