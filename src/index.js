@@ -15,7 +15,7 @@ class AppRoot extends HTMLElement {
         </div>
 
         <buffer-zone class="zone">
-          <div class="zone__header">Буферная зона <small>(ctrl/alt - для возврата фигуры в эту зону)</small></div>
+          <div class="zone__header">Буферная зона <small>(перетащите фигуру сюда; Ctrl/Alt — быстрый способ)</small></div>
           <div class="zone__content"></div>
         </buffer-zone>
 
@@ -294,20 +294,18 @@ class WorkZone extends HTMLElement {
         g.innerHTML = '';
 
         const worldPerPx = this._vb.w / this._svg.clientWidth;
-        const strokeW = worldPerPx * 4; // ровно 1 экранный пиксель
+        const strokeW = worldPerPx * 4;
 
-        // —— функции «прищелкивания» к пиксельной сетке ——
         const snapX = (xWorld) => {
-            const screenX = (xWorld - this._vb.x) / worldPerPx;         // в пикселях
-            const aligned = Math.round(screenX) + 0.5;                   // N + 0.5 px
-            return this._vb.x + aligned * worldPerPx;                    // назад в мир
+            const screenX = (xWorld - this._vb.x) / worldPerPx;
+            const aligned = Math.round(screenX) + 0.5;
+            return this._vb.x + aligned * worldPerPx;
         };
         const snapY = (yWorld) => {
             const screenY = (yWorld - this._vb.y) / worldPerPx;
             const aligned = Math.round(screenY) + 0.5;
             return this._vb.y + aligned * worldPerPx;
         };
-        const edgePadWorld = 6 * worldPerPx;
 
         const nice = (v) => {
             const p = 10 ** Math.floor(Math.log10(v));
@@ -324,56 +322,116 @@ class WorkZone extends HTMLElement {
 
         const pxPerStep = step / worldPerPx;
         const showEvery = Math.max(1, Math.round(55 / pxPerStep));
-
-        // размер шрифта стабильно из worldPerPx
         const fontWorld = 14 * worldPerPx;
 
-        // --- X-линии ---
+        const vbLeft = snapX(this._vb.x);
+        const vbTop = snapY(this._vb.y);
+        const vbRight = snapX(this._vb.x + this._vb.w);
+        const vbBottom = snapY(this._vb.y + this._vb.h);
+
+        const bandH = 28 * worldPerPx; // низ
+        const bandW = 40 * worldPerPx; // лево
+
+        const xAxisY = snapY(this._vb.y + this._vb.h - bandH);
+        const yAxisX = snapX(this._vb.x + bandW);
+
+        const leftBandW = yAxisX - vbLeft;
+        const bottomBandH = vbBottom - xAxisY;
+
+        const makeRect = (x, y, w, h, fill) => {
+            const r = document.createElementNS(SVG_NS, 'rect');
+            r.setAttribute('x', x); r.setAttribute('y', y);
+            r.setAttribute('width', w); r.setAttribute('height', h);
+            r.setAttribute('fill', fill);
+            return r;
+        };
+
+        g.appendChild(makeRect(vbLeft, xAxisY, this._vb.w, bottomBandH, '#2a2a2a')); // нижняя лента
+        g.appendChild(makeRect(vbLeft, vbTop, leftBandW, this._vb.h, '#2a2a2a')); // левая лента
+
+        const gridLeft = yAxisX;
+        const gridRight = vbRight;
+        const gridTop = vbTop;
+        const gridBottom = xAxisY;
+
+        if (gridRight <= gridLeft || gridBottom <= gridTop) return;
+
         const kStartX = Math.ceil((this._vb.x - 1e-9) / step);
         const kEndX = Math.floor((this._vb.x + this._vb.w + 1e-9) / step);
 
+        const minGapPxX = 36;
+        let lastXpx = -Infinity;
+
         for (let k = kStartX; k <= kEndX; k++) {
             const x = k * step;
-            const xs = snapX(x); // прищелкнули к пикселям
-            const l = this._line(xs, this._vb.y, xs, this._vb.y + this._vb.h, strokeW);
+            const xs = snapX(x);
+            if (xs < gridLeft || xs > gridRight) continue;
+
+            const l = this._line(xs, gridTop, xs, gridBottom, strokeW);
             l.setAttribute('stroke-linecap', 'butt');
             g.appendChild(l);
 
             if ((k % showEvery) === 0) {
-                const tx = document.createElementNS(SVG_NS, 'text');
-                tx.setAttribute('x', xs);
-                tx.setAttribute('y', snapY(this._vb.y + this._vb.h - edgePadWorld)); // тоже можно снапнуть по Y
-                tx.setAttribute('text-anchor', 'middle');
-                tx.setAttribute('dominant-baseline', 'alphabetic');
-                tx.setAttribute('font-size', fontWorld);
-                tx.textContent = this._formatTick(k * step, step);
-                g.appendChild(tx);
+                const curPx = (xs - vbLeft) / worldPerPx;
+                if (curPx - lastXpx >= minGapPxX) {
+                    const tx = document.createElementNS(SVG_NS, 'text');
+                    tx.setAttribute('x', xs);
+                    tx.setAttribute('y', xAxisY + bottomBandH / 2);
+                    tx.setAttribute('text-anchor', 'middle');
+                    tx.setAttribute('dominant-baseline', 'middle');
+                    tx.setAttribute('font-size', fontWorld);
+                    tx.textContent = this._formatTick(k * step, step);
+                    g.appendChild(tx);
+                    lastXpx = curPx;
+                }
             }
         }
 
-        // --- Y-линии ---
+        //  Y
         const kStartY = Math.ceil((this._vb.y - 1e-9) / step);
         const kEndY = Math.floor((this._vb.y + this._vb.h + 1e-9) / step);
+
+        const minGapPxY = 24;
+        let lastYpx = -Infinity;
 
         for (let k = kStartY; k <= kEndY; k++) {
             const y = k * step;
             const ys = snapY(y);
-            const l = this._line(this._vb.x, ys, this._vb.x + this._vb.w, ys, strokeW);
+            if (ys < gridTop || ys > gridBottom) continue;
+
+            const l = this._line(gridLeft, ys, gridRight, ys, strokeW);
             l.setAttribute('stroke-linecap', 'butt');
             g.appendChild(l);
 
             if ((k % showEvery) === 0) {
-                const ty = document.createElementNS(SVG_NS, 'text');
-                ty.setAttribute('x', snapX(this._vb.x + edgePadWorld));    // можно снапнуть по X
-                ty.setAttribute('y', ys);
-                ty.setAttribute('text-anchor', 'start');
-                ty.setAttribute('dominant-baseline', 'middle');
-                ty.setAttribute('font-size', fontWorld);
-                ty.textContent = this._formatTick(k * step, step);
-                g.appendChild(ty);
+                const curPx = (ys - vbTop) / worldPerPx;
+                if (curPx - lastYpx >= minGapPxY) {
+                    const ty = document.createElementNS(SVG_NS, 'text');
+                    ty.setAttribute('x', vbLeft + leftBandW / 2);
+                    ty.setAttribute('y', ys);
+                    ty.setAttribute('text-anchor', 'middle');
+                    ty.setAttribute('dominant-baseline', 'middle');
+                    ty.setAttribute('font-size', fontWorld);
+                    ty.textContent = this._formatTick(k * step, step);
+                    g.appendChild(ty);
+                    lastYpx = curPx;
+                }
             }
         }
+
+        const axisW = worldPerPx * 6;
+        const xAxis = this._line(gridLeft, xAxisY, gridRight, xAxisY, axisW);
+        xAxis.setAttribute('stroke', '#444');
+        xAxis.setAttribute('stroke-linecap', 'butt');
+        g.appendChild(xAxis);
+
+        const yAxis = this._line(yAxisX, gridTop, yAxisX, gridBottom, axisW);
+        yAxis.setAttribute('stroke', '#444');
+        yAxis.setAttribute('stroke-linecap', 'butt');
+        g.appendChild(yAxis);
     }
+
+
 
     _clientToWorld(x, y) {
         const p = this._svg.createSVGPoint();
@@ -412,9 +470,9 @@ class WorkZone extends HTMLElement {
         };
 
         const onDown = (ev) => {
-            if (ev.ctrlKey || ev.altKey) {         // горячий старт
+            if (ev.ctrlKey || ev.altKey) {
                 ev.preventDefault();
-                this._startLiftDrag(ev, g, poly);    // ⬅ вместо _startCrossDnD
+                this._startLiftDrag(ev, g, poly);
                 return;
             }
             if (ev.button !== 0) return;
@@ -427,7 +485,6 @@ class WorkZone extends HTMLElement {
 
         const onMove = (ev) => {
             if (!drag) return;
-            // если зашли курсором в buffer — переключаемся на «живой» перенос БЕЗ клавиш
             const buf = document.querySelector('buffer-zone');
             if (buf) {
                 const r = buf.getBoundingClientRect();
@@ -436,12 +493,11 @@ class WorkZone extends HTMLElement {
                     poly.classList.remove('dragging');
                     poly.releasePointerCapture?.(drag.pid);
                     drag = null;
-                    this._startLiftDrag(ev, g, poly);  // ⬅ ключевой вызов
+                    this._startLiftDrag(ev, g, poly);
                     return;
                 }
             }
 
-            // обычный drag по рабочей зоне
             const v = this._toView(ev.clientX, ev.clientY);
             g._tx = drag.tx + (v.x - drag.x);
             g._ty = drag.ty + (v.y - drag.y);
@@ -468,23 +524,20 @@ class WorkZone extends HTMLElement {
         const buffer = document.querySelector('buffer-zone');
         if (!buffer) return;
 
-        // 1) оверлей поверх рабочего SVG
         const vbStr = this._svg.getAttribute('viewBox');
         this._showOverlay(vbStr);
-        this._placeOverlayOverWork(); // на всякий случай сразу выровняем
+        this._placeOverlayOverWork();
 
-        // 2) переносим тот же <g> в оверлей (плейсхолдер оставляем в слое работы)
         const placeholder = document.createComment('g-placeholder');
         if (!g._placeholder) g._placeholder = placeholder;
         else g._placeholder.replaceWith(placeholder);
         this._layer.replaceChild(placeholder, g);
-        this._overlaySvg.appendChild(g); // <-- важно: в оверлейный SVG
+        this._overlaySvg.appendChild(g);
 
-        // 3) стиль и подготовка
         poly.releasePointerCapture?.(startEv.pointerId);
         poly.classList.add('dragging');
 
-        // центроид текущего полигона (локальные точки)
+        // центр текущего полигона
         const ptsLocal = this._parsePoints(poly.getAttribute('points'));
         const cLocal = this._centroid(ptsLocal);
 
@@ -494,10 +547,9 @@ class WorkZone extends HTMLElement {
         };
 
         const onMove = (e) => {
-            // поддерживаем совпадение, если вдруг страница поехала/резайзнулась
             this._placeOverlayOverWork();
 
-            // ставим центр полигона под курсор в системе координат ОВЕРЛЕЯ
+            // ставим центр полигона под курсор
             const cur = this._clientToOverlay(e.clientX, e.clientY);
             g._tx = cur.x - cLocal.x;
             g._ty = cur.y - cLocal.y;
@@ -523,7 +575,6 @@ class WorkZone extends HTMLElement {
                 buffer.addPolygons([{ points: ptsStr, viewBox: '0 0 100 70', fill: poly.getAttribute('fill'), stroke: poly.getAttribute('stroke') }]);
                 g.remove();
             } else {
-                // вернуть в рабочую зону на новой позиции и поджать внутрь
                 this._layer.replaceChild(g, g._placeholder);
                 delete g._placeholder;
                 this._clampTranslate(g);
@@ -539,7 +590,7 @@ class WorkZone extends HTMLElement {
 
 
     _startNativeDnD(startEv, g, poly) {
-        // 1) временный draggable‑прокси под курсором
+        // временный прокси под курсором
         const proxy = document.createElement('div');
         proxy.setAttribute('draggable', 'true');
         Object.assign(proxy.style, {
@@ -548,7 +599,6 @@ class WorkZone extends HTMLElement {
         });
         document.body.appendChild(proxy);
 
-        // 2) drag‑image (клонируем текущую фигуру; учитываем translate)
         const dragSvg = document.createElementNS(SVG_NS, 'svg');
         dragSvg.setAttribute('width', '200');
         dragSvg.setAttribute('height', '120');
@@ -567,7 +617,6 @@ class WorkZone extends HTMLElement {
         const cleanup = () => { proxy.remove(); dragSvg.remove(); };
 
         proxy.addEventListener('dragstart', (e) => {
-            // кладём канонические точки, чтобы буфер рисовал исходную форму
             e.dataTransfer.setData('application/x-polygon', JSON.stringify({
                 canonicalPoints: g.dataset.canonical || poly.getAttribute('points'),
                 fill: poly.getAttribute('fill'),
@@ -578,25 +627,20 @@ class WorkZone extends HTMLElement {
             document.body.appendChild(dragSvg);
             e.dataTransfer.setDragImage(dragSvg, 100, 60);
 
-            // помечаем источник переноса: BufferZone на drop удалит этот g
             currentDrag = g;
         }, { once: true });
 
         proxy.addEventListener('dragend', () => {
-            // Если сброс вне буфера — фигура остаётся на месте (BufferZone ничего не удалит).
             cleanup();
             currentDrag = null;
         }, { once: true });
 
-        // На случай, если пользователь отпустил кнопку раньше, чем стартанул drag:
         window.addEventListener('pointerup', () => { cleanup(); }, { once: true });
 
-        // ВАЖНО: нативный drag начнётся на следующем реальном движении мыши.
-        // Пользователь уже двигает — браузер сам инициирует drag.
     }
 
 
-    // ——— utils ———
+    // utils
     _toView(x, y) { const p = this._svg.createSVGPoint(); p.x = x; p.y = y; return p.matrixTransform(this._svg.getScreenCTM().inverse()); }
     _line(x1, y1, x2, y2, w) {
         const ln = document.createElementNS(SVG_NS, 'line');
@@ -604,8 +648,7 @@ class WorkZone extends HTMLElement {
         ln.setAttribute('x2', x2); ln.setAttribute('y2', y2);
         ln.setAttribute('stroke', '#333');
         ln.setAttribute('stroke-width', w);
-        ln.setAttribute('vector-effect', 'non-scaling-stroke'); // ширина в экранных px
-        // ln.setAttribute('shape-rendering', 'crispEdges'); // можно убрать: снап даёт лучше
+        ln.setAttribute('vector-effect', 'non-scaling-stroke');
         return ln;
     } _parsePoints(a) { return a.trim().split(/\s+/).map(p => p.split(',').map(Number)); }
     _pointsAttr(arr) { return arr.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '); }
@@ -613,27 +656,25 @@ class WorkZone extends HTMLElement {
     _bbox(pts) { let miX = Infinity, miY = Infinity, maX = -Infinity, maY = -Infinity; for (const [x, y] of pts) { if (x < miX) miX = x; if (x > maX) maX = x; if (y < miY) miY = y; if (y > maY) maY = y; } return { minX: miX, minY: miY, maxX: maX, maxY: maY, width: maX - miX, height: maY - miY }; }
     _clamp(v, a, b) { return Math.min(Math.max(v, a), b); }
 
-    // === overlay helpers ===
+    // overlay helpers
     _ensureOverlay() {
         if (this._overlaySvg) return this._overlaySvg;
 
-        // контейнер на весь экран поверх всего
         const div = document.createElement('div');
         Object.assign(div.style, {
             position: 'fixed',
             left: '0', top: '0', width: '100vw', height: '100vh',
             pointerEvents: 'none',
-            zIndex: '2147483647',   // выше всего
+            zIndex: '2147483647',
             display: 'none'
         });
 
-        // svg, совмещённый с рабочим, НО с overflow:visible
         const svg = document.createElementNS(SVG_NS, 'svg');
         Object.assign(svg.style, {
             position: 'absolute',
             left: '0px', top: '0px',
             width: '0px', height: '0px',
-            overflow: 'visible'     // КЛЮЧ: рисуем за пределами рамки
+            overflow: 'visible'
         });
 
         div.appendChild(svg);
@@ -647,7 +688,6 @@ class WorkZone extends HTMLElement {
     _placeOverlayOverWork() {
         const ov = this._ensureOverlay();
         const r = this._svg.getBoundingClientRect();
-        // совмещаем оверлейный SVG по пикселям с рабочим
         ov.style.left = `${r.left}px`;
         ov.style.top = `${r.top}px`;
         ov.style.width = `${r.width}px`;
