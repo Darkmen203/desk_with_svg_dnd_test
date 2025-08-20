@@ -136,11 +136,18 @@ class WorkZone extends HTMLElement {
     connectedCallback() {
         const style = document.createElement('style');
         style.textContent = `
-      :host { display:block; height:100%; position:relative; touch-action:none; }
-      svg { display:block; background:#1d1d1d; width:100%; height:100%; user-select:none; }
-      .shape polygon { fill:#c2185b; stroke:#8a1143; stroke-width:0.8; vector-effect:non-scaling-stroke; cursor:grab; }
-      .dragging, .panning { cursor:grabbing !important; }
-      text { fill:#8e8e8e; paint-order:stroke; stroke:#1d1d1d; stroke-width:0.5; }
+        :host { display:block; height:100%; position:relative; touch-action:none; }
+        svg { display:block; background:#1d1d1d; width:100%; height:100%; user-select:none; }
+        .shape polygon { fill:#c2185b; stroke:#8a1143; stroke-width:0.8; vector-effect:non-scaling-stroke; cursor:grab; }
+        .dragging, .panning { cursor:grabbing !important; }
+        text {
+            fill: #bfbfbf;
+            stroke: none;
+            paint-order: normal;
+            text-rendering: geometricPrecision; /* помогает сглаживанию */
+            pointer-events: none; /* подписи не перехватывают мышь */
+        }
+        .hud, .hud * { pointer-events: none; } /* чтобы не перекрывал drag */
     `;
         this.shadowRoot.appendChild(style);
 
@@ -151,9 +158,11 @@ class WorkZone extends HTMLElement {
         const setVB = () => svg.setAttribute('viewBox', `${this._vb.x} ${this._vb.y} ${this._vb.w} ${this._vb.h}`);
         setVB();
 
-        this._grid = document.createElementNS(SVG_NS, 'g');
-        this._layer = document.createElementNS(SVG_NS, 'g');
-        svg.append(this._grid, this._layer);
+        this._grid = document.createElementNS(SVG_NS, 'g');   // сетка (линии)
+        this._layer = document.createElementNS(SVG_NS, 'g');   // фигуры
+        this._hud = document.createElementNS(SVG_NS, 'g');   // оси, подписи, ленты
+        this._hud.setAttribute('class', 'hud');
+        svg.append(this._grid, this._layer, this._hud);
         this.shadowRoot.appendChild(svg);
         this._svg = svg;
 
@@ -290,8 +299,18 @@ class WorkZone extends HTMLElement {
 
     // ——— grid ———
     _drawGrid() {
-        const g = this._grid;
-        g.innerHTML = '';
+        const grid = this._grid;
+
+        if (!this._hud) {
+            this._hud = document.createElementNS(SVG_NS, 'g');
+            this._hud.setAttribute('class', 'hud');
+            this._hud.setAttribute('style', 'pointer-events:none');
+            this._svg.appendChild(this._hud);
+        }
+        const hud = this._hud;
+
+        grid.innerHTML = '';
+        hud.innerHTML = '';
 
         const worldPerPx = this._vb.w / this._svg.clientWidth;
         const strokeW = worldPerPx * 4;
@@ -346,8 +365,8 @@ class WorkZone extends HTMLElement {
             return r;
         };
 
-        g.appendChild(makeRect(vbLeft, xAxisY, this._vb.w, bottomBandH, '#2a2a2a')); // нижняя лента
-        g.appendChild(makeRect(vbLeft, vbTop, leftBandW, this._vb.h, '#2a2a2a')); // левая лента
+        hud.appendChild(makeRect(vbLeft, xAxisY, this._vb.w, bottomBandH, '#2a2a2a'));
+        hud.appendChild(makeRect(vbLeft, vbTop, leftBandW, this._vb.h, '#2a2a2a'));
 
         const gridLeft = yAxisX;
         const gridRight = vbRight;
@@ -367,21 +386,26 @@ class WorkZone extends HTMLElement {
             const xs = snapX(x);
             if (xs < gridLeft || xs > gridRight) continue;
 
+            // линии сетки — в grid
             const l = this._line(xs, gridTop, xs, gridBottom, strokeW);
             l.setAttribute('stroke-linecap', 'butt');
-            g.appendChild(l);
+            grid.appendChild(l);
 
             if ((k % showEvery) === 0) {
                 const curPx = (xs - vbLeft) / worldPerPx;
                 if (curPx - lastXpx >= minGapPxX) {
+                    // подписи — в HUD
                     const tx = document.createElementNS(SVG_NS, 'text');
                     tx.setAttribute('x', xs);
                     tx.setAttribute('y', xAxisY + bottomBandH / 2);
                     tx.setAttribute('text-anchor', 'middle');
                     tx.setAttribute('dominant-baseline', 'middle');
                     tx.setAttribute('font-size', fontWorld);
+                    tx.setAttribute('stroke', 'none');
+                    tx.setAttribute('paint-order', 'normal');
+                    tx.setAttribute('text-rendering', 'geometricPrecision');
                     tx.textContent = this._formatTick(k * step, step);
-                    g.appendChild(tx);
+                    hud.appendChild(tx);
                     lastXpx = curPx;
                 }
             }
@@ -401,7 +425,7 @@ class WorkZone extends HTMLElement {
 
             const l = this._line(gridLeft, ys, gridRight, ys, strokeW);
             l.setAttribute('stroke-linecap', 'butt');
-            g.appendChild(l);
+            grid.appendChild(l);
 
             if ((k % showEvery) === 0) {
                 const curPx = (ys - vbTop) / worldPerPx;
@@ -412,24 +436,29 @@ class WorkZone extends HTMLElement {
                     ty.setAttribute('text-anchor', 'middle');
                     ty.setAttribute('dominant-baseline', 'middle');
                     ty.setAttribute('font-size', fontWorld);
+                    ty.setAttribute('stroke', 'none');
+                    ty.setAttribute('paint-order', 'normal');
+                    ty.setAttribute('text-rendering', 'geometricPrecision');
                     ty.textContent = this._formatTick(k * step, step);
-                    g.appendChild(ty);
+                    hud.appendChild(ty);
                     lastYpx = curPx;
                 }
             }
         }
 
         const axisW = worldPerPx * 6;
+
         const xAxis = this._line(gridLeft, xAxisY, gridRight, xAxisY, axisW);
         xAxis.setAttribute('stroke', '#444');
         xAxis.setAttribute('stroke-linecap', 'butt');
-        g.appendChild(xAxis);
+        hud.appendChild(xAxis); // ось поверх фигур
 
         const yAxis = this._line(yAxisX, gridTop, yAxisX, gridBottom, axisW);
         yAxis.setAttribute('stroke', '#444');
         yAxis.setAttribute('stroke-linecap', 'butt');
-        g.appendChild(yAxis);
+        hud.appendChild(yAxis); // ось поверх фигур
     }
+
 
 
 
